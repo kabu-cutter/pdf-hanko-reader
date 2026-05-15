@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDFハンコリーダー v0.2.4</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="title-block">
+      <p class="eyebrow">PDFハンコリーダー</p>
+      <h1>v0.2.4 プロトタイプ</h1>
+    </div>
+
+    <div class="open-tools" aria-label="PDFを開く">
+      <button id="openLocalPdfButton" type="button" class="file-button">ローカルPDFを開く</button>
+      <input id="pdfInput" type="file" accept="application/pdf" />
+
+      <form id="urlForm" class="url-form">
+        <input id="pdfUrlInput" type="url" placeholder="PDF URLを入力" aria-label="PDF URL" />
+        <button type="submit">URLを開く</button>
+      </form>
+    </div>
+  </header>
+
+  <main class="app-layout">
+    <aside class="sidebar" aria-label="スタンプと保存">
+      <section class="panel">
+        <h2>スタンプ</h2>
+        <p class="hint">スタンプを選び、PDF上をクリックして押します。</p>
+        <div id="stampPalette" class="stamp-palette"></div>
+      </section>
+
+      <section class="panel">
+        <h2>現在のPDF</h2>
+        <p id="documentLabel" class="document-label">まだPDFを開いていません。</p>
+        <p id="saveStatus" class="save-status">ハンコを押すと自動保存されます。</p>
+      </section>
+
+      <section class="panel">
+        <h2>PDF履歴</h2>
+        <p class="hint">URL PDFは履歴から再オープンできます。ローカルPDFも対応ブラウザでは履歴から開けます。</p>
+        <div id="historyList" class="history-list"></div>
+        <button id="clearHistoryButton" type="button" class="clear-history-button">履歴を消去</button>
+      </section>
+
+      <section class="panel">
+        <h2>配置JSON</h2>
+        <p class="hint">自動保存はブラウザ内に保存されます。必要な場合はJSONを書き出してください。</p>
+        <div class="button-row">
+          <button id="copyJsonButton" type="button">コピー</button>
+          <button id="downloadJsonButton" type="button">書き出し</button>
+        </div>
+        <label class="import-button">
+          JSONを読み込み
+          <input id="jsonInput" type="file" accept="application/json" />
+        </label>
+        <textarea id="jsonOutput" readonly spellcheck="false" aria-label="スタンプ配置JSON"></textarea>
+      </section>
+
+      <section class="panel note-panel">
+        <h2>v0.2.4のルール</h2>
+        <ul>
+          <li>押したスタンプは移動できません。</li>
+          <li>サイズ変更できません。</li>
+          <li>個別削除できません。</li>
+          <li>位置はページ内の比率で保存します。</li>
+          <li>保存先はPDF名またはPDF URLごとに分かれます。</li>
+          <li>テキストPDFは初回表示時に読みやすい倍率を自動推定します。</li>
+        </ul>
+      </section>
+    </aside>
+
+    <section class="viewer-shell" aria-label="PDFビューア">
+      <div class="viewer-toolbar" aria-label="ページ移動とズーム">
+        <div class="toolbar-group">
+          <button id="prevPageButton" type="button">前へ</button>
+          <label class="page-control">
+            <span>ページ</span>
+            <input id="pageNumberInput" type="number" min="1" value="1" />
+            <span id="pageTotalLabel">/ -</span>
+          </label>
+          <button id="nextPageButton" type="button">次へ</button>
+        </div>
+
+        <div class="toolbar-group zoom-toolbar-group">
+          <button id="zoomOutButton" type="button">−</button>
+          <label class="zoom-control">
+            <span class="visually-hidden">ズーム倍率</span>
+            <input id="zoomSlider" class="zoom-slider" type="range" min="50" max="250" step="5" value="100" disabled />
+          </label>
+          <span id="zoomLabel" class="zoom-label">100%</span>
+          <button id="zoomInButton" type="button">＋</button>
+          <button id="zoomResetButton" type="button">100%</button>
+          <button id="autoZoomButton" type="button">読みやすく</button>
+        </div>
+
+        <div class="toolbar-group scroll-toolbar-group">
+          <label class="scroll-control">
+            <span>横位置</span>
+            <input id="horizontalScrollRange" class="horizontal-scroll-range" type="range" min="0" max="0" step="1" value="0" disabled />
+          </label>
+        </div>
+      </div>
+
+      <div id="viewerScroller" class="viewer-scroller">
+        <div id="emptyState" class="empty-state">
+          <p>PDFを開くと、ここにページが表示されます。</p>
+        </div>
+        <div id="pdfViewer" class="pdf-viewer"></div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
