@@ -4,15 +4,15 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@5.7.284/build/pdf.worker.mjs";
 
 const MM_TO_CSS_PX = 96 / 25.4;
-const BASE_RENDER_SCALE = 1.35;
+const BASE_RENDER_SCALE = 1;
 const STORAGE_PREFIX = "pdf-hanko-reader:v0.2:";
 const HISTORY_KEY = "pdf-hanko-reader:history:v0.2";
 const FILE_HANDLE_DB_NAME = "pdf-hanko-reader-file-handles";
 const FILE_HANDLE_STORE_NAME = "handles";
 const MAX_HISTORY_ITEMS = 12;
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 2.5;
-const ZOOM_STEP = 0.25;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.1;
 const TARGET_TEXT_PX = 17;
 
 const stamps = [
@@ -79,6 +79,10 @@ const state = {
   lastAutoZoomInfo: null,
   currentFileHandle: null,
   pendingHorizontalScrollRatio: null,
+  viewMode: "fit-page",
+  currentRenderScale: 1,
+  currentBasePageSize: null,
+  debugVisible: false,
 };
 
 const elements = {
@@ -109,6 +113,11 @@ const elements = {
   zoomSlider: document.querySelector("#zoomSlider"),
   horizontalScrollRange: document.querySelector("#horizontalScrollRange"),
   zoomLabel: document.querySelector("#zoomLabel"),
+  fitPageButton: document.querySelector("#fitPageButton"),
+  fitWidthButton: document.querySelector("#fitWidthButton"),
+  manualZoomButton: document.querySelector("#manualZoomButton"),
+  debugToggle: document.querySelector("#debugToggle"),
+  debugPanel: document.querySelector("#debugPanel"),
 };
 
 function init() {
@@ -132,13 +141,23 @@ function init() {
   elements.zoomInButton.addEventListener("click", () => changeZoom(ZOOM_STEP));
   elements.zoomResetButton.addEventListener("click", resetZoom);
   elements.autoZoomButton.addEventListener("click", applyReadableZoom);
+  elements.fitPageButton.addEventListener("click", () => setViewMode("fit-page"));
+  elements.fitWidthButton.addEventListener("click", () => setViewMode("fit-width"));
+  elements.manualZoomButton.addEventListener("click", () => setViewMode("manual"));
+  elements.debugToggle.addEventListener("change", handleDebugToggle);
   elements.zoomSlider.addEventListener("input", handleZoomSliderInput);
   elements.horizontalScrollRange.addEventListener("input", handleHorizontalScrollRangeInput);
   elements.viewerScroller.addEventListener("scroll", updateHorizontalScrollControls, { passive: true });
-  window.addEventListener("resize", () => {
-    rerenderPlacedStamps();
-    updateHorizontalScrollControls();
-  });
+  window.addEventListener("resize", debounce(() => {
+    if (!state.pdfDoc) return;
+    if (state.viewMode === "manual") {
+      rerenderPlacedStamps();
+      updateHorizontalScrollControls();
+      updateDebugPanel();
+      return;
+    }
+    renderCurrentPage();
+  }, 120));
 }
 
 function renderStampPalette() {
@@ -225,8 +244,9 @@ async function loadPdfFromFile(file, options = {}) {
     state.sourceUrl = null;
     state.currentFileHandle = options.handle ?? null;
     state.currentPage = 1;
-    state.zoom = await estimateReadableZoom(pdfDoc);
-    state.lastAutoZoomInfo = "文字サイズまたはページ幅から初期倍率を自動調整しました。";
+    state.viewMode = "fit-page";
+    state.zoom = 1;
+    state.lastAutoZoomInfo = "ページ全体表示で開きました。";
 
     restorePlacementsForCurrentDocument({ restoreView: true });
     const hasFileHandle = await rememberFileHandle(state.documentKey, options.handle);
@@ -261,8 +281,9 @@ async function loadPdfFromUrl(url) {
     state.sourceUrl = normalizedUrl;
     state.currentFileHandle = null;
     state.currentPage = 1;
-    state.zoom = await estimateReadableZoom(pdfDoc);
-    state.lastAutoZoomInfo = "文字サイズまたはページ幅から初期倍率を自動調整しました。";
+    state.viewMode = "fit-page";
+    state.zoom = 1;
+    state.lastAutoZoomInfo = "ページ全体表示で開きました。";
 
     restorePlacementsForCurrentDocument({ restoreView: true });
     addHistoryEntry({
@@ -292,7 +313,11 @@ async function renderCurrentPage() {
   const scrollSnapshot = getScrollSnapshot();
   const pageNumber = state.currentPage;
   const page = await state.pdfDoc.getPage(pageNumber);
-  const viewport = page.getViewport({ scale: BASE_RENDER_SCALE * state.zoom });
+  const baseViewport = page.getViewport({ scale: 1 });
+  const renderScale = calculateRenderScale(baseViewport);
+  const viewport = page.getViewport({ scale: renderScale });
+  state.currentRenderScale = renderScale;
+  state.currentBasePageSize = { width: baseViewport.width, height: baseViewport.height };
 
   if (token !== state.renderToken) return;
 
@@ -300,7 +325,7 @@ async function renderCurrentPage() {
   elements.emptyState.style.display = "none";
   state.pageLayer = null;
 
-  elements.pdfViewer.style.width = `${viewport.width}px`;
+  elements.pdfViewer.style.width = `${Math.ceil(viewport.width)}px`;
 
   const pageWrap = document.createElement("div");
   pageWrap.className = "page-wrap";
@@ -309,8 +334,8 @@ async function renderCurrentPage() {
 
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
-  canvas.width = Math.floor(viewport.width);
-  canvas.height = Math.floor(viewport.height);
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
   canvas.style.width = `${viewport.width}px`;
   canvas.style.height = `${viewport.height}px`;
 
@@ -331,6 +356,7 @@ async function renderCurrentPage() {
   restoreScrollFromSnapshot(scrollSnapshot);
   updateToolbarState();
   scheduleHorizontalScrollControlsUpdate();
+  updateDebugPanel();
   persistViewState();
 }
 
@@ -377,7 +403,7 @@ function renderPlacement(placement) {
   element.classList.add("placed-stamp");
   element.dataset.placementId = placement.id;
 
-  const sizePx = mmToCssPx(placement.sizeMm) * state.zoom;
+  const sizePx = mmToCssPx(placement.sizeMm) * getActiveRenderScale();
   const layerWidth = layer.clientWidth;
   const layerHeight = layer.clientHeight;
 
@@ -395,7 +421,7 @@ function renderPlacement(placement) {
 }
 
 function getStampMarginRatios(stamp, layer) {
-  const sizePx = mmToCssPx(stamp.sizeMm) * state.zoom;
+  const sizePx = mmToCssPx(stamp.sizeMm) * getActiveRenderScale();
   const layerWidth = Math.max(1, layer.clientWidth);
   const layerHeight = Math.max(1, layer.clientHeight);
 
@@ -461,11 +487,84 @@ function handlePageNumberChange() {
   renderCurrentPage();
 }
 
+function setViewMode(mode) {
+  if (!state.pdfDoc) return;
+  if (!["fit-page", "fit-width", "manual"].includes(mode)) return;
+  if (mode === "manual") {
+    state.zoom = clamp(roundZoom(getActiveRenderScale()), MIN_ZOOM, MAX_ZOOM);
+  }
+  state.viewMode = mode;
+  renderCurrentPage();
+}
+
+function calculateRenderScale(baseViewport) {
+  if (!baseViewport) return clamp(state.zoom, MIN_ZOOM, MAX_ZOOM);
+  if (state.viewMode === "manual") return clamp(state.zoom, MIN_ZOOM, MAX_ZOOM);
+
+  const scroller = elements.viewerScroller;
+  const paddingAllowance = 28;
+  const availableWidth = Math.max(120, scroller.clientWidth - paddingAllowance);
+  const availableHeight = Math.max(120, scroller.clientHeight - paddingAllowance);
+
+  if (state.viewMode === "fit-width") {
+    return clamp(roundZoom(availableWidth / baseViewport.width), MIN_ZOOM, MAX_ZOOM);
+  }
+
+  const fitPageScale = Math.min(availableWidth / baseViewport.width, availableHeight / baseViewport.height);
+  return clamp(roundZoom(fitPageScale), MIN_ZOOM, MAX_ZOOM);
+}
+
+function getActiveRenderScale() {
+  return clamp(Number(state.currentRenderScale) || Number(state.zoom) || 1, MIN_ZOOM, MAX_ZOOM);
+}
+
+function updateViewModeButtons() {
+  const hasPdf = Boolean(state.pdfDoc);
+  const pairs = [
+    [elements.fitPageButton, "fit-page"],
+    [elements.fitWidthButton, "fit-width"],
+    [elements.manualZoomButton, "manual"],
+  ];
+
+  for (const [button, mode] of pairs) {
+    button.disabled = !hasPdf;
+    button.setAttribute("aria-pressed", String(state.viewMode === mode));
+  }
+}
+
+function handleDebugToggle(event) {
+  state.debugVisible = Boolean(event.currentTarget.checked);
+  updateDebugPanel();
+}
+
+function updateDebugPanel() {
+  const panel = elements.debugPanel;
+  if (!panel) return;
+  panel.hidden = !state.debugVisible;
+  if (!state.debugVisible) return;
+
+  const scroller = elements.viewerScroller;
+  const base = state.currentBasePageSize ?? { width: 0, height: 0 };
+  panel.textContent = [
+    `mode: ${state.viewMode}`,
+    `scale: ${Math.round(getActiveRenderScale() * 100)}%`,
+    `pageBase: ${Math.round(base.width)} x ${Math.round(base.height)}`,
+    `scrollWidth: ${Math.round(scroller.scrollWidth)}`,
+    `clientWidth: ${Math.round(scroller.clientWidth)}`,
+    `scrollLeft: ${Math.round(scroller.scrollLeft)}`,
+    `maxScrollLeft: ${Math.round(getMaxHorizontalScroll())}`,
+  ].join("\n");
+}
+
 function handleZoomSliderInput() {
   if (!state.pdfDoc) return;
   const requestedPercent = Number(elements.zoomSlider.value);
   const nextZoom = clamp(roundZoom(requestedPercent / 100), MIN_ZOOM, MAX_ZOOM);
-  if (nextZoom === state.zoom) return;
+  state.viewMode = "manual";
+  if (nextZoom === state.zoom && state.currentRenderScale === nextZoom) {
+    updateToolbarState();
+    return;
+  }
   state.zoom = nextZoom;
   renderCurrentPage();
 }
@@ -482,14 +581,20 @@ function handleHorizontalScrollRangeInput() {
 
 function changeZoom(delta) {
   if (!state.pdfDoc) return;
-  const nextZoom = clamp(roundZoom(state.zoom + delta), MIN_ZOOM, MAX_ZOOM);
-  if (nextZoom === state.zoom) return;
+  const base = state.viewMode === "manual" ? state.zoom : getActiveRenderScale();
+  const nextZoom = clamp(roundZoom(base + delta), MIN_ZOOM, MAX_ZOOM);
+  state.viewMode = "manual";
+  if (nextZoom === state.zoom && state.currentRenderScale === nextZoom) {
+    updateToolbarState();
+    return;
+  }
   state.zoom = nextZoom;
   renderCurrentPage();
 }
 
 function resetZoom() {
-  if (!state.pdfDoc || state.zoom === 1) return;
+  if (!state.pdfDoc) return;
+  state.viewMode = "manual";
   state.zoom = 1;
   renderCurrentPage();
 }
@@ -497,6 +602,7 @@ function resetZoom() {
 async function applyReadableZoom() {
   if (!state.pdfDoc) return;
   setStatus("読みやすい倍率を計算しています…");
+  state.viewMode = "manual";
   state.zoom = await estimateReadableZoom(state.pdfDoc);
   state.lastAutoZoomInfo = "読みやすい倍率を再計算しました。";
   await renderCurrentPage();
@@ -509,7 +615,7 @@ async function estimateReadableZoom(pdfDoc) {
     const medianTextSize = await detectMedianTextSize(page);
 
     if (medianTextSize) {
-      const zoom = TARGET_TEXT_PX / (medianTextSize * BASE_RENDER_SCALE);
+      const zoom = TARGET_TEXT_PX / medianTextSize;
       return clamp(roundZoom(zoom), MIN_ZOOM, MAX_ZOOM);
     }
 
@@ -547,7 +653,7 @@ async function detectMedianTextSize(page) {
 }
 
 function estimateFitWidthZoom(page) {
-  const viewport = page.getViewport({ scale: BASE_RENDER_SCALE });
+  const viewport = page.getViewport({ scale: 1 });
   const container = elements.viewerScroller;
   const availableWidth = Math.max(360, (container?.clientWidth ?? 900) - 48);
   const zoom = availableWidth / viewport.width;
@@ -623,6 +729,9 @@ function restorePlacementsForCurrentDocument({ restoreView = false } = {}) {
       if (Number.isFinite(restoredZoom)) {
         state.zoom = clamp(roundZoom(restoredZoom), MIN_ZOOM, MAX_ZOOM);
       }
+      if (["fit-page", "fit-width", "manual"].includes(savedData.view.viewMode)) {
+        state.viewMode = savedData.view.viewMode;
+      }
       const restoredScrollRatio = Number(savedData.view.horizontalScrollRatio);
       state.pendingHorizontalScrollRatio = Number.isFinite(restoredScrollRatio)
         ? clamp(restoredScrollRatio, 0, 1)
@@ -652,7 +761,7 @@ function storageKey() {
 function buildJsonPayload() {
   return {
     app: "PDFハンコリーダー",
-    version: "0.2.4",
+    version: "0.2.5",
     document: {
       key: state.documentKey,
       label: state.documentLabel,
@@ -665,7 +774,8 @@ function buildJsonPayload() {
     view: {
       currentPage: state.currentPage,
       zoom: state.zoom,
-      zoomPercent: Math.round(state.zoom * 100),
+      zoomPercent: Math.round(getActiveRenderScale() * 100),
+      viewMode: state.viewMode,
       horizontalScrollRatio: getSavedHorizontalScrollRatio(),
     },
     placements: state.placements,
@@ -691,14 +801,17 @@ function updateToolbarState() {
   elements.pageNumberInput.value = String(state.currentPage);
   elements.pageTotalLabel.textContent = hasPdf ? `/ ${totalPages}` : "/ -";
 
-  elements.zoomOutButton.disabled = !hasPdf || state.zoom <= MIN_ZOOM;
-  elements.zoomInButton.disabled = !hasPdf || state.zoom >= MAX_ZOOM;
-  elements.zoomResetButton.disabled = !hasPdf || state.zoom === 1;
+  const activeScale = getActiveRenderScale();
+  elements.zoomOutButton.disabled = !hasPdf || activeScale <= MIN_ZOOM;
+  elements.zoomInButton.disabled = !hasPdf || activeScale >= MAX_ZOOM;
+  elements.zoomResetButton.disabled = !hasPdf;
   elements.autoZoomButton.disabled = !hasPdf;
   elements.zoomSlider.disabled = !hasPdf;
-  elements.zoomSlider.value = String(Math.round(state.zoom * 100));
-  elements.zoomLabel.textContent = `${Math.round(state.zoom * 100)}%`;
+  elements.zoomSlider.value = String(Math.round(activeScale * 100));
+  elements.zoomLabel.textContent = `${Math.round(activeScale * 100)}%`;
+  updateViewModeButtons();
   updateHorizontalScrollControls();
+  updateDebugPanel();
 }
 
 function getScrollSnapshot() {
@@ -745,6 +858,7 @@ function updateHorizontalScrollControls() {
   range.disabled = !hasPdf || maxLeft <= 0;
   range.max = String(Math.round(maxLeft));
   range.value = String(Math.round(clamp(elements.viewerScroller.scrollLeft, 0, maxLeft)));
+  updateDebugPanel();
 }
 
 function setStatus(message, isError = false) {
@@ -1005,6 +1119,7 @@ function showLoadError(error, prefix) {
   elements.emptyState.style.display = "grid";
   updateToolbarState();
   updateHorizontalScrollControls();
+  updateDebugPanel();
   setStatus(prefix, true);
   alert(prefix);
 }
@@ -1055,6 +1170,14 @@ function safeFileBaseName(value) {
     .replace(/[^a-zA-Z0-9\-_一-龠ぁ-んァ-ンー]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80) || "placements";
+}
+
+function debounce(fn, waitMs) {
+  let timeoutId = null;
+  return (...args) => {
+    clearTimeout(timeoutId);
+    timeoutId = setTimeout(() => fn(...args), waitMs);
+  };
 }
 
 function formatDateTime(isoText) {

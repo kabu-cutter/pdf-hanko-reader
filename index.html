@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PDFハンコリーダー v0.2.4</title>
+  <title>PDFハンコリーダー v0.2.5</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="app-header">
     <div class="title-block">
       <p class="eyebrow">PDFハンコリーダー</p>
-      <h1>v0.2.4 プロトタイプ</h1>
+      <h1>v0.2.5 プロトタイプ</h1>
     </div>
 
     <div class="open-tools" aria-label="PDFを開く">
@@ -60,14 +60,14 @@
       </section>
 
       <section class="panel note-panel">
-        <h2>v0.2.4のルール</h2>
+        <h2>v0.2.5のルール</h2>
         <ul>
           <li>押したスタンプは移動できません。</li>
           <li>サイズ変更できません。</li>
           <li>個別削除できません。</li>
           <li>位置はページ内の比率で保存します。</li>
           <li>保存先はPDF名またはPDF URLごとに分かれます。</li>
-          <li>テキストPDFは初回表示時に読みやすい倍率を自動推定します。</li>
+          <li>初回表示は「全体表示」で、A4縦以外でもページ枠全体を確認しやすくします。</li>
         </ul>
       </section>
     </aside>
@@ -84,16 +84,23 @@
           <button id="nextPageButton" type="button">次へ</button>
         </div>
 
+        <div class="toolbar-group view-mode-toolbar-group">
+          <button id="fitPageButton" type="button" aria-pressed="true">全体表示</button>
+          <button id="fitWidthButton" type="button" aria-pressed="false">幅に合わせる</button>
+          <button id="manualZoomButton" type="button" aria-pressed="false">手動</button>
+        </div>
+
         <div class="toolbar-group zoom-toolbar-group">
           <button id="zoomOutButton" type="button">−</button>
           <label class="zoom-control">
             <span class="visually-hidden">ズーム倍率</span>
-            <input id="zoomSlider" class="zoom-slider" type="range" min="50" max="250" step="5" value="100" disabled />
+            <input id="zoomSlider" class="zoom-slider" type="range" min="25" max="400" step="5" value="100" disabled />
           </label>
           <span id="zoomLabel" class="zoom-label">100%</span>
           <button id="zoomInButton" type="button">＋</button>
           <button id="zoomResetButton" type="button">100%</button>
           <button id="autoZoomButton" type="button">読みやすく</button>
+          <label class="debug-toggle"><input id="debugToggle" type="checkbox" /> デバッグ</label>
         </div>
 
         <div class="toolbar-group scroll-toolbar-group">
@@ -110,6 +117,7 @@
         </div>
         <div id="pdfViewer" class="pdf-viewer"></div>
       </div>
+      <pre id="debugPanel" class="debug-panel" hidden></pre>
     </section>
   </main>
 
